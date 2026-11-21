@@ -1,0 +1,41 @@
+{
+  "name": "arshfa-government",
+  "version": "1.0.0",
+  "description": "برنامج أرشفة الكتب والمخاطبات - واجهة عربية لنظام Windows",
+  "main": "main.js",
+  "author": "Arshfa",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "build": {
+    "appId": "com.arshfa.government",
+    "productName": "أرشفة",
+    "asar": true,
+    "files": [
+      "index.html",
+      "styles.css",
+      "renderer.js",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}
