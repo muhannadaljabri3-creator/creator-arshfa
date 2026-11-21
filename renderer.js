@@ -18,7 +18,11 @@ function displayPath(p){return p||"لم يتم تحديده";}
 function enqueueForOcr(item){
   if(!window.arshfa?.enqueueFile||!item.sourcePath)return false;
   item.status="queued";item.note="أضيف الملف إلى قائمة المعالجة";
-  window.arshfa.enqueueFile({id:item.id,path:item.sourcePath,name:item.name,subjects:state.subjects,people:state.people}).catch(e=>{
+  window.arshfa.enqueueFile({id:item.id,path:item.sourcePath,name:item.name,subjects:state.subjects,people:state.people}).then(result=>{
+    if(item.status==="queued"&&result?.status){
+      item.status=result.status;item.note=result.message||item.note;renderAll();
+    }
+  }).catch(e=>{
     item.status="failed";item.note="تعذر إضافة الملف: "+e.message;renderAll();
   });
   return true;

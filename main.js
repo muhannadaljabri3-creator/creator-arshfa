@@ -130,26 +130,34 @@ let ocrRunning=false;
 async function runOcrQueue(){
   if(ocrRunning)return;
   ocrRunning=true;
-  while(ocrQueue.length){
-    const job=ocrQueue.shift();
-    send("scanner:processing-update",{id:job.id,status:"processing",message:"جارٍ قراءة الكتاب بمحرك OCR العربي"});
-    try{
-      const text=await ocr.recognize(job.path,path.join(app.getPath("userData"),"tessdata"));
-      const fields=ocr.extractFields(text,{subjects:job.subjects,people:job.people});
-      const found=[fields.number,fields.subject,fields.person].filter(Boolean).length;
-      send("scanner:processing-update",{id:job.id,status:"review",fields,message:found?`تم استخراج ${found} من 3 حقول، يرجى المراجعة`:"لم يتم التعرف على بيانات، أدخلها يدوياً"});
-    }catch(e){
-      send("scanner:processing-update",{id:job.id,status:"failed",message:"فشلت قراءة الملف: "+e.message});
+  try{
+    while(ocrQueue.length){
+      const job=ocrQueue.shift();
+      send("scanner:processing-update",{id:job.id,status:"processing",message:"جارٍ قراءة الصورة بمحرك OCR العربي"});
+      try{
+        const text=await ocr.recognize(job.path,path.join(app.getPath("userData"),"tessdata"));
+        const fields=ocr.extractFields(text,{subjects:job.subjects,people:job.people});
+        const found=[fields.number,fields.subject,fields.person].filter(Boolean).length;
+        send("scanner:processing-update",{id:job.id,status:"review",fields,message:found?`تم استخراج ${found} من 3 حقول، يرجى المراجعة`:"اكتملت القراءة، أدخل البيانات غير المستخرجة يدوياً"});
+      }catch(e){
+        send("scanner:processing-update",{id:job.id,status:"failed",message:"فشلت قراءة الملف: "+e.message});
+      }
     }
+  }finally{
+    ocrRunning=false;
+    if(ocrQueue.length)runOcrQueue().catch(error=>send("scanner:error",{message:"تعذر متابعة قائمة OCR: "+error.message}));
   }
-  ocrRunning=false;
 }
 app.on("before-quit",()=>{ocr.terminate();});
 ipcMain.handle("scanner:enqueue",async(_e,payload)=>{
   if(!payload||!payload.path)throw new Error("مسار الملف غير محدد");
+  if(!payload.id)throw new Error("معرّف الملف غير محدد");
+  if(!allowed.has(path.extname(payload.path).toLowerCase()))throw new Error("صيغة الملف غير مدعومة للقراءة");
+  await fsp.access(payload.path);
   const list=v=>Array.isArray(v)?v.filter(x=>typeof x==="string"):[];
   ocrQueue.push({id:payload.id,path:payload.path,subjects:list(payload.subjects),people:list(payload.people)});
-  send("scanner:processing-update",{id:payload.id,status:"queued",message:"تم استلام الملف وإضافته لقائمة العمل"});
-  runOcrQueue();
-  return true;
+  const status=ocrRunning||ocrQueue.length>1?"queued":"processing";
+  send("scanner:processing-update",{id:payload.id,status,message:status==="queued"?"الملف بانتظار دوره في قائمة المعالجة":"بدأت قراءة الملف"});
+  runOcrQueue().catch(error=>send("scanner:error",{message:"تعذر تشغيل قائمة OCR: "+error.message}));
+  return {status,message:status==="queued"?"الملف بانتظار دوره في قائمة المعالجة":"بدأت قراءة الملف"};
 });
