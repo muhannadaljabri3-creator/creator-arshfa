@@ -4,10 +4,12 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const chokidar = require("chokidar");
 const ocr = require("./ocr");
+const settingsStore = require("./settings-store");
 
 let mainWindow;
 let watcher = null;
-let settings = { scanFolder: "", archiveFolder: "" };
+let settings = settingsStore.normalizeSettings();
+let hasSavedSettings = false;
 const seen = new Set();
 const allowed = new Set([".pdf",".jpg",".jpeg",".png",".tif",".tiff",".bmp",".gif",".webp",".avif"]);
 
@@ -24,7 +26,17 @@ function createWindow(){
   });
   mainWindow.loadFile(path.join(__dirname,"index.html"));
 }
-app.whenReady().then(createWindow);
+app.whenReady().then(async()=>{
+  try{
+    const settingsPath=path.join(app.getPath("userData"),"settings.json");
+    settings=await settingsStore.loadSettings(settingsPath);
+    try{await fsp.access(settingsPath);hasSavedSettings=true;}catch(error){if(error.code!=="ENOENT")throw error;}
+    createWindow();
+  }catch(error){
+    dialog.showErrorBox("تعذر تحميل الإعدادات",error.message);
+    app.quit();
+  }
+});
 app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit();});
 app.on("activate",()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
 
@@ -55,14 +67,19 @@ ipcMain.handle("dialog:choose-folder",async()=>{
   const result=await dialog.showOpenDialog(mainWindow,{properties:["openDirectory","createDirectory"]});
   return result.canceled?null:result.filePaths[0];
 });
-ipcMain.handle("settings:get",()=>settings);
-ipcMain.handle("settings:set",(_e,next)=>{settings={...settings,...next};return settings;});
+ipcMain.handle("settings:get",()=>({...settings,hasSavedSettings}));
+ipcMain.handle("settings:set",async(_e,next)=>{
+  settings=await settingsStore.saveSettings(path.join(app.getPath("userData"),"settings.json"),next,settings);
+  hasSavedSettings=true;
+  return settings;
+});
 ipcMain.handle("watch:start",async(_e,folder)=>{
   if(!folder)throw new Error("لم يتم تحديد مجلد السكنر");
   const folderStat=await fsp.stat(folder);
   if(!folderStat.isDirectory())throw new Error("المسار المحدد ليس مجلداً");
   if(watcher)await watcher.close();
-  settings.scanFolder=folder;
+  settings=await settingsStore.saveSettings(path.join(app.getPath("userData"),"settings.json"),{...settings,scanFolder:folder},settings);
+  hasSavedSettings=true;
   const nextWatcher=chokidar.watch(folder,{ignoreInitial:false,awaitWriteFinish:{stabilityThreshold:1500,pollInterval:300},depth:4});
   watcher=nextWatcher;
   nextWatcher.on("add",emitFile);

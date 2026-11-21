@@ -4,13 +4,22 @@ const sharp = require("sharp");
 
 let workerPromise = null;
 const MAX_IMAGE_PAGES = 100;
+const stripDirectionMarks = (text) => text.replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
 
 async function getWorker(cachePath) {
   if (!workerPromise) {
     const { createWorker } = require("tesseract.js");
+    const languagePath = path.join(
+      path.dirname(require.resolve("@tesseract.js-data/ara")),
+      "4.0.0_best_int"
+    );
     // Without errorHandler, a failed language download throws uncaught and would crash the main process.
     workerPromise = new Promise((resolve, reject) => {
-      createWorker("ara", 1, { cachePath, errorHandler: (e) => reject(e instanceof Error ? e : new Error(String(e))) }).then(resolve, reject);
+      createWorker("ara", 1, {
+        cachePath,
+        langPath: languagePath,
+        errorHandler: (e) => reject(e instanceof Error ? e : new Error(String(e))),
+      }).then(resolve, reject);
     }).catch((e) => {
       workerPromise = null;
       throw e;
@@ -94,9 +103,27 @@ function findKnown(text, list) {
   return "";
 }
 
+function labeledValue(text, pattern) {
+  const lines = stripDirectionMarks(normalizeDigits(text)).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let index = 0; index < lines.length; index++) {
+    const originalLine = lines[index];
+    const match = normalizeArabic(originalLine).match(pattern);
+    if (!match) continue;
+    const prefixLength = match[0].length - (match[1] || "").length;
+    const value = (originalLine.slice(prefixLength) || "").trim();
+    if (value) return value.replace(/^[\s:：\-–—/]+|[\s:：\-–—]+$/g, "").trim();
+    const next = lines[index + 1]?.trim() || "";
+    if (next && !/^(?:العدد|عدد|الموضوع|موضوع|اسم|الموظف|الموظفه|التاريخ)/.test(normalizeArabic(next))) {
+      return next.replace(/^[\s:：\-–—/]+|[\s:：\-–—]+$/g, "").trim();
+    }
+  }
+  return "";
+}
+
 function extractFields(text, { subjects = [], people = [] } = {}) {
-  const normalized = normalizeDigits(text);
-  const numberMatch = normalized.match(/(?:العدد|عدد)\s*[:：\-]?\s*([0-9]+(?:\s*\/\s*[0-9A-Za-z\u0621-\u064A]+)*)/);
+  const normalized = stripDirectionMarks(normalizeDigits(text));
+  const labeledNumber = labeledValue(text, /^(?:العدد|عدد|رقم(?:\s+الكتاب)?)\s*[:：\-]?\s*(.*)$/);
+  const numberMatch = normalized.match(/(?:العدد|عدد|رقم(?:\s+الكتاب)?)\s*[:：\-]?\s*([0-9]+(?:\s*\/\s*[0-9A-Za-z\u0621-\u064A]+)*)/);
   let date = "";
   const ymd = normalized.match(/(19\d{2}|20\d{2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})/);
   if (ymd) {
@@ -105,10 +132,13 @@ function extractFields(text, { subjects = [], people = [] } = {}) {
     const dmy = normalized.match(/(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(19\d{2}|20\d{2})/);
     if (dmy) date = `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
   }
+  const labeledSubject = labeledValue(text, /^(?:الموضوع|موضوع(?:\s+الكتاب)?|بشأن|م\s*\/)\s*[:：\-]?\s*(.*)$/);
+  const labeledPerson = labeledValue(text, /^(?:اسم\s*(?:الموظف|الموظفه|المعني|المعنيه)|الموظف|الموظفه|الاسم)\s*[:：\-]?\s*(.*)$/);
+  const labeledNumberValue = labeledNumber.replace(/\s+/g, "").slice(0, 64);
   return {
-    number: numberMatch ? numberMatch[1].replace(/\s+/g, "") : "",
-    subject: findKnown(text, subjects),
-    person: findKnown(text, people),
+    number: labeledNumberValue || (numberMatch ? numberMatch[1].replace(/\s+/g, "") : ""),
+    subject: labeledSubject || findKnown(text, subjects),
+    person: labeledPerson || findKnown(text, people),
     date,
   };
 }

@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 const sharp = require("sharp");
 const { extractFields, prepareImagePages } = require("../ocr");
+const { loadSettings, saveSettings } = require("../settings-store");
 
 test("extracts number, date, subject, and employee from Arabic OCR text", () => {
   assert.deepEqual(
@@ -14,6 +15,35 @@ test("extracts number, date, subject, and employee from Arabic OCR text", () => 
     }),
     { number: "452/ش", subject: "إجازة", person: "علي أحمد", date: "2025-03-07" }
   );
+});
+
+test("extracts labeled values even when OCR inserts right-to-left marks", () => {
+  assert.deepEqual(
+    extractFields("\u200fالعدد: ٤٥٢/ش\n\u200fالموضوع: إجازة سنوية\n\u200fاسم الموظف: علي أحمد", {
+      subjects: [],
+      people: [],
+    }),
+    { number: "452/ش", subject: "إجازة سنوية", person: "علي أحمد", date: "" }
+  );
+});
+
+test("extracts a labeled book number when the document says رقم الكتاب", () => {
+  assert.equal(extractFields("رقم الكتاب: ١٢٣/أ").number, "123/أ");
+});
+
+test("persists and reloads folder paths and OCR dictionaries", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "arshfa-settings-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const settingsPath = path.join(dir, "config", "settings.json");
+  assert.equal((await loadSettings(settingsPath)).scanFolder, "");
+
+  const saved = await saveSettings(settingsPath, {
+    scanFolder: path.join(dir, "scanner"),
+    archiveFolder: path.join(dir, "archive"),
+    subjects: ["إجازة سنوية"],
+    people: ["علي أحمد"],
+  });
+  assert.deepEqual(await loadSettings(settingsPath), saved);
 });
 
 test("normalizes common scanner image formats to OCR-ready PNG", async (t) => {

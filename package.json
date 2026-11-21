@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.2.0",
+    "@tesseract.js-data/ara": "^1.0.0",
     "chokidar": "^4.0.3",
     "pdfjs-dist": "^6.5.438",
     "sharp": "^0.35.5",
@@ -39,6 +40,8 @@
       "renderer.js",
       "main.js",
       "ocr.js",
+      "settings-store.js",
+      "node_modules/@tesseract.js-data/ara/**/*",
       "preload.js",
       "package.json"
     ],

@@ -95,9 +95,11 @@ function openReview(fileId){
 }
 async function chooseFolder(kind){
   if(window.arshfa?.chooseFolder){
-    const path=await window.arshfa.chooseFolder();if(!path)return;
-    if(kind==="scan"){state.scanFolder=path;$("scanFolder").value=path;}else{state.archiveFolder=path;$("archiveFolder").value=path;}
-    saveLocalSettings();renderStats();notify("تم تحديد المجلد.");
+    try{
+      const path=await window.arshfa.chooseFolder();if(!path)return;
+      if(kind==="scan"){state.scanFolder=path;$("scanFolder").value=path;}else{state.archiveFolder=path;$("archiveFolder").value=path;}
+      await saveLocalSettings();renderStats();notify("تم تحديد المجلد وحفظه.");
+    }catch(e){notify("تعذر حفظ إعدادات المجلد: "+e.message);}
   }else{
     notify("اختيار المجلدات تلقائياً متاح بعد تشغيل المشروع عبر Electron.");
   }
@@ -116,7 +118,9 @@ async function stopWatch(){
   state.watching=false;renderStats();notify("تم إيقاف المراقبة.");
 }
 function saveLocalSettings(){
-  try{localStorage.setItem("arshfa-settings",JSON.stringify({scanFolder:state.scanFolder,archiveFolder:state.archiveFolder,subjects:state.subjects,people:state.people}));}catch(e){}
+  const settings={scanFolder:state.scanFolder,archiveFolder:state.archiveFolder,subjects:state.subjects,people:state.people};
+  try{localStorage.setItem("arshfa-settings",JSON.stringify(settings));}catch(e){}
+  return window.arshfa?.setSettings?window.arshfa.setSettings(settings):Promise.resolve(settings);
 }
 function loadLocalSettings(){
   try{const s=JSON.parse(localStorage.getItem("arshfa-settings")||"{}");state.scanFolder=s.scanFolder||"";state.archiveFolder=s.archiveFolder||"";if(s.subjects)state.subjects=s.subjects;if(s.people)state.people=s.people;}catch(e){}
@@ -166,9 +170,9 @@ function setupEvents(){
   document.querySelectorAll(".filter").forEach(b=>b.addEventListener("click",()=>{state.filter=b.dataset.filter;renderInbox();}));
   $("reviewForm").addEventListener("submit",approveReview);
   $("skipReviewBtn").addEventListener("click",()=>{state.activeReviewId=null;renderReview();});
-  $("addSubjectBtn").addEventListener("click",()=>{const v=$("newSubject").value.trim();if(v&&!state.subjects.includes(v)){state.subjects.push(v);$("newSubject").value="";saveLocalSettings();renderTags();}});
-  $("addPersonBtn").addEventListener("click",()=>{const v=$("newPerson").value.trim();if(v&&!state.people.includes(v)){state.people.push(v);$("newPerson").value="";saveLocalSettings();renderTags();}});
-  $("saveSettingsBtn").addEventListener("click",()=>{saveLocalSettings();notify("تم حفظ الإعدادات المحلية.");});
+  $("addSubjectBtn").addEventListener("click",async()=>{const v=$("newSubject").value.trim();if(v&&!state.subjects.includes(v)){state.subjects.push(v);$("newSubject").value="";renderTags();try{await saveLocalSettings();}catch(e){notify("تعذر حفظ الإعدادات: "+e.message);}}});
+  $("addPersonBtn").addEventListener("click",async()=>{const v=$("newPerson").value.trim();if(v&&!state.people.includes(v)){state.people.push(v);$("newPerson").value="";renderTags();try{await saveLocalSettings();}catch(e){notify("تعذر حفظ الإعدادات: "+e.message);}}});
+  $("saveSettingsBtn").addEventListener("click",async()=>{try{await saveLocalSettings();notify("تم حفظ الإعدادات.");}catch(e){notify("تعذر حفظ الإعدادات: "+e.message);}});
   $("archiveSearch").addEventListener("input",renderArchive);
   $("retryQueueBtn").addEventListener("click",()=>{
     const retryable=state.files.filter(x=>x.status==="failed"&&x.sourcePath);
@@ -179,8 +183,8 @@ function setupEvents(){
   document.addEventListener("click",e=>{
     const open=e.target.closest("[data-open]");if(open){const x=state.files.find(f=>f.id===open.dataset.open);if(x?.status==="review")openReview(x.id);else notify(x?.note||"تفاصيل الملف");}
     const rev=e.target.closest("[data-review]");if(rev)openReview(rev.dataset.review);
-    const rs=e.target.closest("[data-remove-subject]");if(rs){state.subjects.splice(Number(rs.dataset.removeSubject),1);saveLocalSettings();renderTags();}
-    const rp=e.target.closest("[data-remove-person]");if(rp){state.people.splice(Number(rp.dataset.removePerson),1);saveLocalSettings();renderTags();}
+    const rs=e.target.closest("[data-remove-subject]");if(rs){state.subjects.splice(Number(rs.dataset.removeSubject),1);renderTags();saveLocalSettings().catch(e=>notify("تعذر حفظ الإعدادات: "+e.message));}
+    const rp=e.target.closest("[data-remove-person]");if(rp){state.people.splice(Number(rp.dataset.removePerson),1);renderTags();saveLocalSettings().catch(e=>notify("تعذر حفظ الإعدادات: "+e.message));}
   });
 }
 function bindElectron(){
@@ -192,10 +196,22 @@ function bindElectron(){
   });
   window.arshfa.onQueueError(err=>{log("خطأ معالجة",err.message||String(err));notify(err.message||"حدث خطأ أثناء المعالجة");});
 }
-function init(){
+async function init(){
   loadLocalSettings();setupEvents();bindElectron();
   $("todayLabel").textContent=new Date().toLocaleDateString("ar-IQ",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+  if(window.arshfa?.getSettings){
+    try{
+      const s=await window.arshfa.getSettings();
+      if(s){
+        const hasLegacyLocal=Boolean(state.scanFolder||state.archiveFolder);
+        state.scanFolder=s.hasSavedSettings?s.scanFolder:(s.scanFolder||state.scanFolder);
+        state.archiveFolder=s.hasSavedSettings?s.archiveFolder:(s.archiveFolder||state.archiveFolder);
+        if(s.hasSavedSettings){state.subjects=s.subjects||state.subjects;state.people=s.people||state.people;}
+        $("scanFolder").value=state.scanFolder;$("archiveFolder").value=state.archiveFolder;
+        if(!s.hasSavedSettings&&hasLegacyLocal)await saveLocalSettings();
+      }
+    }catch(e){notify("تعذر تحميل الإعدادات المحفوظة: "+e.message);}
+  }
   renderAll();
-  if(window.arshfa?.getSettings){window.arshfa.getSettings().then(s=>{if(s){state.scanFolder=s.scanFolder||state.scanFolder;state.archiveFolder=s.archiveFolder||state.archiveFolder;$("scanFolder").value=state.scanFolder;$("archiveFolder").value=state.archiveFolder;renderStats();}});}
 }
 document.addEventListener("DOMContentLoaded",init);
