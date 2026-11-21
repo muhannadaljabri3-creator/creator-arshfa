@@ -1,6 +1,7 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("arshfa", {
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   chooseFolder: () => ipcRenderer.invoke("dialog:choose-folder"),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   setSettings: (settings) => ipcRenderer.invoke("settings:set", settings),

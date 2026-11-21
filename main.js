@@ -3,12 +3,13 @@ const path = require("path");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const chokidar = require("chokidar");
+const ocr = require("./ocr");
 
 let mainWindow;
 let watcher = null;
 let settings = { scanFolder: "", archiveFolder: "" };
 const seen = new Set();
-const allowed = new Set([".pdf",".jpg",".jpeg",".png",".tif",".tiff"]);
+const allowed = new Set([".pdf",".jpg",".jpeg",".png",".tif",".tiff",".bmp",".gif",".webp",".avif"]);
 
 function createWindow(){
   mainWindow = new BrowserWindow({
@@ -21,7 +22,7 @@ function createWindow(){
       sandbox: true
     }
   });
-  mainWindow.loadFile("index.html");
+  mainWindow.loadFile(path.join(__dirname,"index.html"));
 }
 app.whenReady().then(createWindow);
 app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit();});
@@ -58,11 +59,24 @@ ipcMain.handle("settings:get",()=>settings);
 ipcMain.handle("settings:set",(_e,next)=>{settings={...settings,...next};return settings;});
 ipcMain.handle("watch:start",async(_e,folder)=>{
   if(!folder)throw new Error("لم يتم تحديد مجلد السكنر");
+  const folderStat=await fsp.stat(folder);
+  if(!folderStat.isDirectory())throw new Error("المسار المحدد ليس مجلداً");
   if(watcher)await watcher.close();
   settings.scanFolder=folder;
-  watcher=chokidar.watch(folder,{ignoreInitial:false,awaitWriteFinish:{stabilityThreshold:1500,pollInterval:300},depth:4});
-  watcher.on("add",emitFile);
-  watcher.on("error",error=>send("scanner:error",{message:error.message}));
+  const nextWatcher=chokidar.watch(folder,{ignoreInitial:false,awaitWriteFinish:{stabilityThreshold:1500,pollInterval:300},depth:4});
+  watcher=nextWatcher;
+  nextWatcher.on("add",emitFile);
+  nextWatcher.on("error",error=>send("scanner:error",{message:error.message}));
+  try{
+    await new Promise((resolve,reject)=>{
+      nextWatcher.once("ready",resolve);
+      nextWatcher.once("error",reject);
+    });
+  }catch(error){
+    await nextWatcher.close();
+    if(watcher===nextWatcher)watcher=null;
+    throw error;
+  }
   send("scanner:watch-status",true);
   return true;
 });
@@ -94,8 +108,31 @@ ipcMain.handle("document:save-imported",async(_e,payload)=>{
   await fsp.copyFile(filePath,target);
   return {destination:target};
 });
+const ocrQueue=[];
+let ocrRunning=false;
+async function runOcrQueue(){
+  if(ocrRunning)return;
+  ocrRunning=true;
+  while(ocrQueue.length){
+    const job=ocrQueue.shift();
+    send("scanner:processing-update",{id:job.id,status:"processing",message:"جارٍ قراءة الكتاب بمحرك OCR العربي"});
+    try{
+      const text=await ocr.recognize(job.path,path.join(app.getPath("userData"),"tessdata"));
+      const fields=ocr.extractFields(text,{subjects:job.subjects,people:job.people});
+      const found=[fields.number,fields.subject,fields.person].filter(Boolean).length;
+      send("scanner:processing-update",{id:job.id,status:"review",fields,message:found?`تم استخراج ${found} من 3 حقول، يرجى المراجعة`:"لم يتم التعرف على بيانات، أدخلها يدوياً"});
+    }catch(e){
+      send("scanner:processing-update",{id:job.id,status:"failed",message:"فشلت قراءة الملف: "+e.message});
+    }
+  }
+  ocrRunning=false;
+}
+app.on("before-quit",()=>{ocr.terminate();});
 ipcMain.handle("scanner:enqueue",async(_e,payload)=>{
-  // The watcher reports paths; OCR and automatic extraction are intentionally a separate next integration step.
+  if(!payload||!payload.path)throw new Error("مسار الملف غير محدد");
+  const list=v=>Array.isArray(v)?v.filter(x=>typeof x==="string"):[];
+  ocrQueue.push({id:payload.id,path:payload.path,subjects:list(payload.subjects),people:list(payload.people)});
   send("scanner:processing-update",{id:payload.id,status:"queued",message:"تم استلام الملف وإضافته لقائمة العمل"});
+  runOcrQueue();
   return true;
 });

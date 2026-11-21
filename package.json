@@ -6,26 +6,39 @@
   "author": "Arshfa",
   "license": "UNLICENSED",
   "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "test": "node --test"
   },
   "devDependencies": {
     "electron": "^35.0.0",
     "electron-builder": "^26.0.12"
   },
   "dependencies": {
-    "chokidar": "^4.0.3"
+    "@napi-rs/canvas": "^1.2.0",
+    "chokidar": "^4.0.3",
+    "pdfjs-dist": "^6.5.438",
+    "sharp": "^0.35.5",
+    "tesseract.js": "^7.0.0"
   },
   "build": {
     "appId": "com.arshfa.government",
     "productName": "أرشفة",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/@napi-rs/**",
+      "node_modules/@img/**"
+    ],
     "files": [
       "index.html",
       "styles.css",
       "renderer.js",
       "main.js",
+      "ocr.js",
       "preload.js",
       "package.json"
     ],
@@ -37,5 +50,8 @@
         "nsis"
       ]
     }
+  },
+  "allowScripts": {
+    "electron@35.7.5": true
   }
 }

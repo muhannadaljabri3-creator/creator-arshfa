@@ -7,7 +7,7 @@ const state = {
 };
 const titles = {dashboard:"لوحة التحكم",inbox:"استقبال ملفات السكنر",processing:"المعالجة المباشرة",review:"قائمة المراجعة",archive:"الأرشيف",settings:"الإعدادات",logs:"سجل العمليات"};
 const statusText = {queued:"بانتظار المعالجة",processing:"قيد المعالجة",review:"تحتاج مراجعة",archived:"مكتمل",failed:"تعذر التعامل"};
-const supported = [".pdf",".jpg",".jpeg",".png",".tif",".tiff"];
+const supported = [".pdf",".jpg",".jpeg",".png",".tif",".tiff",".bmp",".gif",".webp",".avif"];
 
 function notify(message){const t=$("toast");t.textContent=message;t.classList.add("show");clearTimeout(notify.timer);notify.timer=setTimeout(()=>t.classList.remove("show"),3000);}
 function log(action,detail){state.logs.unshift({time:new Date().toLocaleString("ar-IQ"),action,detail});renderLogs();}
@@ -15,19 +15,28 @@ function id(){return (crypto.randomUUID?crypto.randomUUID():String(Date.now()+Ma
 function ext(name){return (name.match(/\.[^.]+$/)||[""])[0].toLowerCase();}
 function safeName(s){return String(s||"").trim().replace(/[\\/:*?"<>|]/g,"").replace(/\s+/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"");}
 function displayPath(p){return p||"لم يتم تحديده";}
+function enqueueForOcr(item){
+  if(!window.arshfa?.enqueueFile||!item.sourcePath)return false;
+  item.status="queued";item.note="أضيف الملف إلى قائمة المعالجة";
+  window.arshfa.enqueueFile({id:item.id,path:item.sourcePath,name:item.name,subjects:state.subjects,people:state.people}).catch(e=>{
+    item.status="failed";item.note="تعذر إضافة الملف: "+e.message;renderAll();
+  });
+  return true;
+}
 function addFile(file,sourcePath=""){
   const name=file.name||"ملف بدون اسم";
   if(!supported.includes(ext(name))){notify("نوع الملف غير مدعوم: "+name);return;}
   const duplicate=state.files.some(x=>x.name===name && x.size===(file.size||0) && x.lastModified===(file.lastModified||0));
   if(duplicate)return;
+  sourcePath=sourcePath||file.path||"";
   const item={id:id(),name,size:file.size||0,lastModified:file.lastModified||Date.now(),sourcePath,status:"queued",received:new Date().toLocaleString("ar-IQ"),number:"",subject:"",person:"",date:"",type:"كتاب",note:"بانتظار المعالجة",fileRef:null};
   // File object is retained only in this running session for manual processing/preview.
   item.fileRef=file;
   state.files.unshift(item);
   log("استلام ملف",name);
   renderAll();
-  if(window.arshfa?.enqueueFile && sourcePath){window.arshfa.enqueueFile({id:item.id,path:sourcePath,name:item.name}).catch(e=>notify("تعذر إضافة الملف: "+e.message));}
-  else if(!window.arshfa){item.note="معاينة المتصفح: يلزم Electron لمعالجة مجلدات الجهاز تلقائياً.";}
+  if(window.arshfa){if(!enqueueForOcr(item)){item.status="failed";item.note="تعذر تحديد مسار الملف لمعالجته.";renderAll();}}
+  else{item.note="معاينة المتصفح: يلزم Electron لمعالجة الملفات تلقائياً.";}
 }
 function showPage(page){
   document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id==="page-"+page));
@@ -125,7 +134,7 @@ function suggestFromText(text){
 }
 function makeFilename(x){
   const parts=[safeName(x.number),safeName(x.subject),safeName(x.person)].filter(Boolean);
-  return (parts.length?parts.join("_"):"كتاب_غير_محدد")+(ext(x.name)===".pdf"?".pdf":".pdf");
+  return (parts.length?parts.join("_"):"كتاب_غير_محدد")+(ext(x.name)||".pdf");
 }
 async function approveReview(event){
   event.preventDefault();const x=state.files.find(f=>f.id===$("reviewId").value);if(!x)return;
@@ -149,7 +158,11 @@ function setupEvents(){
   $("quickStart").addEventListener("click",startWatch);$("startWatchBtn").addEventListener("click",startWatch);$("stopWatchBtn").addEventListener("click",stopWatch);
   $("chooseScan").addEventListener("click",()=>chooseFolder("scan"));$("chooseArchive").addEventListener("click",()=>chooseFolder("archive"));
   $("importBtn").addEventListener("click",importFiles);$("importSettingsBtn").addEventListener("click",importFiles);
-  $("filePicker").addEventListener("change",e=>{[...e.target.files].forEach(f=>addFile(f));e.target.value="";notify("تمت إضافة الملفات إلى قائمة الاستقبال.");});
+  $("filePicker").addEventListener("change",e=>{
+    [...e.target.files].forEach(f=>addFile(f,window.arshfa?.getPathForFile?.(f)||""));
+    e.target.value="";
+    notify("تمت إضافة الملفات إلى قائمة الاستقبال.");
+  });
   document.querySelectorAll(".filter").forEach(b=>b.addEventListener("click",()=>{state.filter=b.dataset.filter;renderInbox();}));
   $("reviewForm").addEventListener("submit",approveReview);
   $("skipReviewBtn").addEventListener("click",()=>{state.activeReviewId=null;renderReview();});
@@ -157,7 +170,11 @@ function setupEvents(){
   $("addPersonBtn").addEventListener("click",()=>{const v=$("newPerson").value.trim();if(v&&!state.people.includes(v)){state.people.push(v);$("newPerson").value="";saveLocalSettings();renderTags();}});
   $("saveSettingsBtn").addEventListener("click",()=>{saveLocalSettings();notify("تم حفظ الإعدادات المحلية.");});
   $("archiveSearch").addEventListener("input",renderArchive);
-  $("retryQueueBtn").addEventListener("click",()=>{notify("ستتم إعادة المحاولة عند ربط محرك OCR ومعالجة الملفات.");});
+  $("retryQueueBtn").addEventListener("click",()=>{
+    const retryable=state.files.filter(x=>x.status==="failed"&&x.sourcePath);
+    if(!retryable.length){notify("لا توجد ملفات فاشلة قابلة لإعادة المحاولة.");return;}
+    retryable.forEach(enqueueForOcr);renderAll();notify("أعيدت الملفات الفاشلة إلى قائمة المعالجة.");
+  });
   $("clearLogsBtn").addEventListener("click",()=>{state.logs=[];renderLogs();});
   document.addEventListener("click",e=>{
     const open=e.target.closest("[data-open]");if(open){const x=state.files.find(f=>f.id===open.dataset.open);if(x?.status==="review")openReview(x.id);else notify(x?.note||"تفاصيل الملف");}
@@ -171,7 +188,7 @@ function bindElectron(){
   window.arshfa.onFileDetected(file=>{addFile({name:file.name,size:file.size||0,lastModified:file.lastModified||Date.now()},file.path);});
   window.arshfa.onWatchStatus(v=>{state.watching=!!v;renderStats();});
   window.arshfa.onProcessingUpdate(update=>{
-    const x=state.files.find(f=>f.id===update.id);if(x){x.status=update.status||x.status;x.note=update.message||x.note;renderAll();}
+    const x=state.files.find(f=>f.id===update.id);if(x){x.status=update.status||x.status;if(update.fields){const f=update.fields;x.number=f.number||x.number;x.subject=f.subject||x.subject;x.person=f.person||x.person;x.date=f.date||x.date;}x.note=update.message||x.note;renderAll();}
   });
   window.arshfa.onQueueError(err=>{log("خطأ معالجة",err.message||String(err));notify(err.message||"حدث خطأ أثناء المعالجة");});
 }
