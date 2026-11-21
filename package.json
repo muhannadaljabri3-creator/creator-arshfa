@@ -29,7 +29,7 @@
   "build": {
     "appId": "com.arshfa.government",
     "productName": "أرشفة",
-    "asar": true,
+    "asar": false,
     "asarUnpack": [
       "node_modules/@napi-rs/**",
       "node_modules/@img/**"
